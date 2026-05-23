@@ -103,6 +103,26 @@ public final class TodoStore: ObservableObject {
         }
     }
 
+    public func clearCompletedToday() throws {
+        try mutate {
+            let currentDay = today()
+            let completedItems = items.filter { $0.day == currentDay && $0.isCompleted }
+
+            for item in completedItems {
+                if let projectID = item.projectID, let stepID = item.stepID {
+                    try updateStepInMemory(projectID: projectID, stepID: stepID) { step in
+                        if step.scheduledTodoID == item.id {
+                            step.scheduledTodoID = nil
+                        }
+                    }
+                }
+            }
+
+            let completedIDs = Set(completedItems.map(\.id))
+            items.removeAll { completedIDs.contains($0.id) }
+        }
+    }
+
     @discardableResult
     public func addProject(title: String) throws -> Project {
         let cleanTitle = try normalizedTitle(title)
@@ -407,4 +427,3 @@ public final class TodoStore: ObservableObject {
         return formatter
     }()
 }
-

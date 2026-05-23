@@ -10,6 +10,7 @@ struct ProjectsPanelView: View {
     @State private var stepDraftTitles: [UUID: String] = [:]
     @State private var expandedProjectIDs: Set<UUID> = []
     @State private var errorMessage: String?
+    @State private var successMessage: String?
 
     private var visibleProjects: [Project] {
         store.projects(showArchived: showArchivedProjects)
@@ -51,6 +52,11 @@ struct ProjectsPanelView: View {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .lineLimit(2)
+            } else if let successMessage {
+                Text(successMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
         }
@@ -126,19 +132,48 @@ struct ProjectsPanelView: View {
             .padding(.top, 6)
         } label: {
             HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 5) {
                     TextField("项目标题", text: projectTitleBinding(for: project))
                         .textFieldStyle(.plain)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(project.isArchived ? .secondary : .primary)
                         .onSubmit { commitProjectTitle(project) }
 
-                    Text("\(project.completedStepCount)/\(project.totalStepCount) 已完成")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        ProgressView(value: completionFraction(for: project))
+                            .controlSize(.small)
+                            .frame(maxWidth: 90)
+                            .opacity(project.totalStepCount == 0 ? 0.35 : 1)
+
+                        Text(projectProgressText(for: project))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let nextStep = nextActionableStep(in: project) {
+                        Text("下一步：\(nextStep.title)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else if project.totalStepCount > 0 {
+                        Text(project.completedStepCount == project.totalStepCount ? "步骤已完成" : "今天已安排")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer()
+
+                Button {
+                    scheduleNextStep(in: project)
+                } label: {
+                    Image(systemName: nextActionableStep(in: project) == nil ? "calendar.badge.checkmark" : "calendar.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(nextActionableStep(in: project) == nil ? "没有可加入今天的下一步" : "加入下一步到今天")
+                .disabled(project.isArchived || nextActionableStep(in: project) == nil)
 
                 Button {
                     archive(project, isArchived: !project.isArchived)
@@ -150,7 +185,7 @@ struct ProjectsPanelView: View {
             }
         }
         .padding(8)
-        .background(project.isArchived ? Color.secondary.opacity(0.08) : Color.clear)
+        .background(projectSectionBackground(for: project))
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .onDisappear { commitProjectTitle(project) }
     }
@@ -192,8 +227,43 @@ struct ProjectsPanelView: View {
             .foregroundStyle(.secondary)
             .help("删除步骤")
         }
+        .padding(.vertical, 3)
+        .background(step.scheduledTodoID == nil ? Color.clear : Color.accentColor.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
         .padding(.leading, 24)
         .onDisappear { commitStepTitle(step, project: project) }
+    }
+
+    private func completionFraction(for project: Project) -> Double {
+        guard project.totalStepCount > 0 else {
+            return 0
+        }
+
+        return Double(project.completedStepCount) / Double(project.totalStepCount)
+    }
+
+    private func projectProgressText(for project: Project) -> String {
+        if project.totalStepCount == 0 {
+            return "还没有步骤"
+        }
+
+        return "\(project.completedStepCount)/\(project.totalStepCount) 已完成"
+    }
+
+    private func nextActionableStep(in project: Project) -> ProjectStep? {
+        project.steps.first { !$0.isCompleted && $0.scheduledTodoID == nil }
+    }
+
+    private func projectSectionBackground(for project: Project) -> Color {
+        if project.isArchived {
+            return Color.secondary.opacity(0.08)
+        }
+
+        if nextActionableStep(in: project) != nil {
+            return Color.accentColor.opacity(0.05)
+        }
+
+        return Color.clear
     }
 
     private func expandedBinding(for projectID: UUID) -> Binding<Bool> {
@@ -237,8 +307,10 @@ struct ProjectsPanelView: View {
             let project = try store.addProject(title: newProjectTitle)
             expandedProjectIDs.insert(project.id)
             newProjectTitle = ""
+            successMessage = nil
             errorMessage = nil
         } catch {
+            successMessage = nil
             errorMessage = "无法新增项目。"
         }
     }
@@ -251,9 +323,11 @@ struct ProjectsPanelView: View {
         do {
             try store.updateProjectTitle(project.id, title: draft)
             projectDraftTitles[project.id] = nil
+            successMessage = nil
             errorMessage = nil
         } catch {
             projectDraftTitles[project.id] = project.title
+            successMessage = nil
             errorMessage = "项目标题不能为空。"
         }
     }
@@ -261,8 +335,10 @@ struct ProjectsPanelView: View {
     private func archive(_ project: Project, isArchived: Bool) {
         do {
             try store.setProjectArchived(project.id, isArchived: isArchived)
+            successMessage = nil
             errorMessage = nil
         } catch {
+            successMessage = nil
             errorMessage = "无法更新项目归档状态。"
         }
     }
@@ -272,8 +348,10 @@ struct ProjectsPanelView: View {
             _ = try store.addStep(project.id, title: newStepTitles[project.id] ?? "")
             newStepTitles[project.id] = ""
             expandedProjectIDs.insert(project.id)
+            successMessage = nil
             errorMessage = nil
         } catch {
+            successMessage = nil
             errorMessage = "无法新增步骤。"
         }
     }
@@ -286,9 +364,11 @@ struct ProjectsPanelView: View {
         do {
             try store.updateStepTitle(projectID: project.id, stepID: step.id, title: draft)
             stepDraftTitles[step.id] = nil
+            successMessage = nil
             errorMessage = nil
         } catch {
             stepDraftTitles[step.id] = step.title
+            successMessage = nil
             errorMessage = "步骤标题不能为空。"
         }
     }
@@ -296,8 +376,10 @@ struct ProjectsPanelView: View {
     private func setStepCompleted(_ step: ProjectStep, project: Project, isCompleted: Bool) {
         do {
             try store.setStepCompleted(projectID: project.id, stepID: step.id, isCompleted: isCompleted)
+            successMessage = nil
             errorMessage = nil
         } catch {
+            successMessage = nil
             errorMessage = "无法更新步骤状态。"
         }
     }
@@ -305,22 +387,35 @@ struct ProjectsPanelView: View {
     private func schedule(_ step: ProjectStep, project: Project) {
         do {
             _ = try store.scheduleStepForToday(projectID: project.id, stepID: step.id)
+            successMessage = "已加入今天：\(step.title)"
             errorMessage = nil
         } catch TodoStore.StoreError.stepAlreadyScheduled {
+            successMessage = nil
             errorMessage = "这个步骤已经加入今天。"
         } catch {
+            successMessage = nil
             errorMessage = "无法加入今天。"
         }
+    }
+
+    private func scheduleNextStep(in project: Project) {
+        guard let step = nextActionableStep(in: project) else {
+            return
+        }
+
+        schedule(step, project: project)
+        expandedProjectIDs.insert(project.id)
     }
 
     private func deleteStep(_ step: ProjectStep, project: Project) {
         do {
             try store.deleteStep(projectID: project.id, stepID: step.id)
             stepDraftTitles[step.id] = nil
+            successMessage = nil
             errorMessage = nil
         } catch {
+            successMessage = nil
             errorMessage = "无法删除步骤。"
         }
     }
 }
-

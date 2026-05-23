@@ -50,6 +50,29 @@ func checkCompletingTaskCanBeHiddenFromTodayList() throws {
     try expect(store.todayItems(showCompleted: true)[0].completedAt == now, "completed task should record completion date")
 }
 
+func checkClearingCompletedTodayKeepsOpenAndArchivedItems() throws {
+    let url = try temporaryStoreURL()
+    let archived = TodoItem(
+        title: "历史完成",
+        day: "2026-05-10",
+        isCompleted: true,
+        createdAt: Date(timeIntervalSince1970: 10),
+        completedAt: Date(timeIntervalSince1970: 20)
+    )
+    let data = try JSONEncoder.todoItemsEncoder.encode(TodoDatabase(todos: [archived], projects: []))
+    try data.write(to: url)
+
+    let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
+    let open = try store.add(title: "未完成")
+    let completed = try store.add(title: "已完成")
+    try store.setCompleted(completed.id, isCompleted: true)
+
+    try store.clearCompletedToday()
+
+    try expect(store.todayItems(showCompleted: true).map(\.id) == [open.id], "clearing completed today should keep open item")
+    try expect(store.archivedItems().map(\.title) == ["历史完成"], "clearing completed today should not remove archived items")
+}
+
 func checkEditingAndDeletingTasksPersist() throws {
     let url = try temporaryStoreURL()
     let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
@@ -247,6 +270,7 @@ func checkArchivedProjectsHideByDefault() throws {
 let checks = [
     ("adding task persists and reloads", checkAddingTaskPersistsAndReloads),
     ("completing task can be hidden", checkCompletingTaskCanBeHiddenFromTodayList),
+    ("clearing completed today keeps open and archived items", checkClearingCompletedTodayKeepsOpenAndArchivedItems),
     ("editing and deleting persist", checkEditingAndDeletingTasksPersist),
     ("rollover archives completed tasks", checkRolloverMovesUnfinishedTasksToTodayAndKeepsCompletedArchived),
     ("failed save rolls back memory", checkFailedSaveRollsBackInMemoryChanges),

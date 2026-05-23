@@ -19,11 +19,42 @@ struct TodayPanelView: View {
         store.todayItems(showCompleted: false).count
     }
 
+    private var allTodayItems: [TodoItem] {
+        store.todayItems(showCompleted: true)
+    }
+
+    private var completedCount: Int {
+        allTodayItems.filter(\.isCompleted).count
+    }
+
+    private var totalCount: Int {
+        allTodayItems.count
+    }
+
+    private var completionFraction: Double {
+        guard totalCount > 0 else {
+            return 0
+        }
+
+        return Double(completedCount) / Double(totalCount)
+    }
+
+    private var todayListHeight: CGFloat {
+        let rowsHeight = visibleItems.reduce(CGFloat.zero) { total, item in
+            total + (store.projectTitle(for: item) == nil ? 48 : 64)
+        }
+        let spacingHeight = CGFloat(max(visibleItems.count - 1, 0)) * 4
+
+        return min(rowsHeight + spacingHeight, 420)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
             Divider()
+
+            progressSection
 
             captureSection
 
@@ -46,7 +77,7 @@ struct TodayPanelView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 260)
+                .frame(height: todayListHeight)
             }
         }
         .onAppear(perform: focusCaptureField)
@@ -72,6 +103,13 @@ struct TodayPanelView: View {
             }
             .buttonStyle(.borderless)
             .help(showCompleted ? "隐藏已完成" : "显示已完成")
+
+            Button(action: clearCompletedToday) {
+                Image(systemName: "checkmark.circle.badge.xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("清理今天已完成")
+            .disabled(completedCount == 0)
         }
     }
 
@@ -87,6 +125,30 @@ struct TodayPanelView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 18)
+    }
+
+    private var progressSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(progressText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if completedCount > 0 {
+                    Button("清理已完成", action: clearCompletedToday)
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("移除今天已完成的任务")
+                }
+            }
+
+            ProgressView(value: completionFraction)
+                .controlSize(.small)
+                .opacity(totalCount == 0 ? 0.35 : 1)
+        }
     }
 
     private var captureSection: some View {
@@ -145,6 +207,18 @@ struct TodayPanelView: View {
         return Color.secondary.opacity(0.75)
     }
 
+    private var progressText: String {
+        if totalCount == 0 {
+            return "今天还没有任务"
+        }
+
+        if openCount == 0 {
+            return "今天 \(totalCount) 项全部完成"
+        }
+
+        return "完成 \(completedCount)/\(totalCount)，剩余 \(openCount)"
+    }
+
     private func binding(for item: TodoItem) -> Binding<String> {
         Binding {
             draftTitles[item.id] ?? item.title
@@ -189,6 +263,35 @@ struct TodayPanelView: View {
                 recentlyAddedTaskID = nil
                 successMessage = nil
             }
+        }
+    }
+
+    private func clearCompletedToday() {
+        guard completedCount > 0 else {
+            return
+        }
+
+        let clearedCount = completedCount
+
+        do {
+            try store.clearCompletedToday()
+            draftTitles = draftTitles.filter { id, _ in
+                store.items.contains { $0.id == id }
+            }
+            errorMessage = nil
+            recentlyAddedTaskID = nil
+            successMessage = "已清理 \(clearedCount) 项"
+            focusCaptureField()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                if successMessage == "已清理 \(clearedCount) 项" {
+                    successMessage = nil
+                }
+            }
+        } catch {
+            successMessage = nil
+            errorMessage = "无法清理已完成。"
+            focusCaptureField()
         }
     }
 
