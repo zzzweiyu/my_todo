@@ -67,7 +67,7 @@ struct TodayPanelView: View {
                             TodoRowView(
                                 item: item,
                                 title: binding(for: item),
-                                projectTitle: store.projectTitle(for: item),
+                                projectTitle: store.projectPath(for: item),
                                 deleteHelp: item.projectID == nil ? "删除任务" : "取消今日安排",
                                 isHighlighted: item.id == recentlyAddedTaskID,
                                 onToggle: { setCompleted(item, isCompleted: !item.isCompleted) },

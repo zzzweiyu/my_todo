@@ -184,6 +184,71 @@ func checkProjectAndStepsPersist() throws {
     try expect(reloaded.projects(showArchived: true)[0].steps[0].id == step.id, "step identity should persist")
 }
 
+func checkNestedProjectStepsPersistAndCountRecursively() throws {
+    let url = try temporaryStoreURL()
+    let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
+    let project = try store.addProject(title: "写论文")
+    let parent = try store.addStep(project.id, title: "整理大纲")
+    let child = try store.addChildStep(projectID: project.id, parentStepID: parent.id, title: "列章节")
+
+    try store.setStepCompleted(projectID: project.id, stepID: child.id, isCompleted: true)
+
+    let savedProject = store.projects(showArchived: true)[0]
+    try expect(savedProject.totalStepCount == 2, "project should count parent and child steps")
+    try expect(savedProject.completedStepCount == 1, "project should count completed child step")
+
+    let reloaded = try TodoStore(storageURL: url, today: { "2026-05-11" })
+    let reloadedParent = reloaded.projects(showArchived: true)[0].steps[0]
+    try expect(reloadedParent.children.map(\.title) == ["列章节"], "child step should persist under parent")
+    try expect(reloadedParent.children[0].isCompleted, "child completion should persist")
+}
+
+func checkNestedProjectStepSchedulesAndSyncsTodayItem() throws {
+    let now = Date(timeIntervalSince1970: 1_900_000_000)
+    let url = try temporaryStoreURL()
+    let store = try TodoStore(storageURL: url, today: { "2026-05-11" }, now: { now })
+    let project = try store.addProject(title: "写论文")
+    let parent = try store.addStep(project.id, title: "整理大纲")
+    let child = try store.addChildStep(projectID: project.id, parentStepID: parent.id, title: "列章节")
+
+    let todo = try store.scheduleStepForToday(projectID: project.id, stepID: child.id)
+
+    try expect(store.todayItems(showCompleted: true).map(\.stepID) == [child.id], "scheduled child should create linked today item")
+    try expect(store.projects(showArchived: true)[0].steps[0].children[0].scheduledTodoID == todo.id, "child should remember scheduled todo")
+
+    try store.setCompleted(todo.id, isCompleted: true)
+
+    let savedChild = store.projects(showArchived: true)[0].steps[0].children[0]
+    try expect(savedChild.isCompleted, "completing linked today item should complete nested child")
+    try expect(savedChild.completedAt == now, "nested child should record completion date")
+}
+
+func checkScheduledNestedStepExposesFullProjectPath() throws {
+    let url = try temporaryStoreURL()
+    let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
+    let project = try store.addProject(title: "写论文")
+    let parent = try store.addStep(project.id, title: "整理大纲")
+    let child = try store.addChildStep(projectID: project.id, parentStepID: parent.id, title: "列章节")
+
+    let todo = try store.scheduleStepForToday(projectID: project.id, stepID: child.id)
+
+    try expect(store.projectPath(for: todo) == "写论文 / 整理大纲 / 列章节", "scheduled nested step should expose full parent path")
+}
+
+func checkDeletingParentStepRemovesNestedScheduledTodos() throws {
+    let url = try temporaryStoreURL()
+    let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
+    let project = try store.addProject(title: "写论文")
+    let parent = try store.addStep(project.id, title: "整理大纲")
+    let child = try store.addChildStep(projectID: project.id, parentStepID: parent.id, title: "列章节")
+
+    _ = try store.scheduleStepForToday(projectID: project.id, stepID: child.id)
+    try store.deleteStep(projectID: project.id, stepID: parent.id)
+
+    try expect(store.projects(showArchived: true)[0].steps == [], "deleting parent should remove nested child")
+    try expect(store.todayItems(showCompleted: true) == [], "deleting parent should remove nested linked today item")
+}
+
 func checkSchedulingProjectStepCreatesLinkedTodayItemOnce() throws {
     let url = try temporaryStoreURL()
     let store = try TodoStore(storageURL: url, today: { "2026-05-11" })
@@ -277,6 +342,10 @@ let checks = [
     ("failed project save rolls back memory", checkFailedProjectSaveRollsBackInMemoryChanges),
     ("legacy todo array migrates to database", checkLegacyTodoArrayMigratesToVersionedDatabase),
     ("project and steps persist", checkProjectAndStepsPersist),
+    ("nested project steps persist and count recursively", checkNestedProjectStepsPersistAndCountRecursively),
+    ("nested project step schedules and syncs today item", checkNestedProjectStepSchedulesAndSyncsTodayItem),
+    ("scheduled nested step exposes full project path", checkScheduledNestedStepExposesFullProjectPath),
+    ("deleting parent step removes nested scheduled todos", checkDeletingParentStepRemovesNestedScheduledTodos),
     ("scheduling project step links today item once", checkSchedulingProjectStepCreatesLinkedTodayItemOnce),
     ("today completion syncs project step", checkTodayCompletionSyncsProjectStep),
     ("project step completion syncs today item", checkProjectStepCompletionSyncsTodayItem),

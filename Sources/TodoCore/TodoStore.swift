@@ -168,6 +168,18 @@ public final class TodoStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    public func addChildStep(projectID: UUID, parentStepID: UUID, title: String) throws -> ProjectStep {
+        let cleanTitle = try normalizedTitle(title)
+        return try mutate {
+            let step = ProjectStep(title: cleanTitle, createdAt: now())
+            try updateStepInMemory(projectID: projectID, stepID: parentStepID) { parent in
+                parent.children.append(step)
+            }
+            return step
+        }
+    }
+
     public func updateStepTitle(projectID: UUID, stepID: UUID, title: String) throws {
         let cleanTitle = try normalizedTitle(title)
         try mutate {
@@ -187,13 +199,20 @@ public final class TodoStore: ObservableObject {
                 throw StoreError.projectNotFound
             }
             guard let stepIndex = projectItems[projectIndex].steps.firstIndex(where: { $0.id == stepID }) else {
-                throw StoreError.stepNotFound
+                let removed = try removeStepInMemory(
+                    from: &projectItems[projectIndex].steps,
+                    stepID: stepID
+                )
+                for scheduledTodoID in removed.scheduledTodoIDs {
+                    items.removeAll { $0.id == scheduledTodoID }
+                }
+                return
             }
 
-            if let scheduledTodoID = projectItems[projectIndex].steps[stepIndex].scheduledTodoID {
+            let removed = projectItems[projectIndex].steps.remove(at: stepIndex)
+            for scheduledTodoID in removed.scheduledTodoIDs {
                 items.removeAll { $0.id == scheduledTodoID }
             }
-            projectItems[projectIndex].steps.remove(at: stepIndex)
         }
     }
 
@@ -219,11 +238,10 @@ public final class TodoStore: ObservableObject {
             guard let projectIndex = projectItems.firstIndex(where: { $0.id == projectID }) else {
                 throw StoreError.projectNotFound
             }
-            guard let stepIndex = projectItems[projectIndex].steps.firstIndex(where: { $0.id == stepID }) else {
+            guard let step = findStep(in: projectItems[projectIndex].steps, stepID: stepID) else {
                 throw StoreError.stepNotFound
             }
 
-            let step = projectItems[projectIndex].steps[stepIndex]
             if let scheduledTodoID = step.scheduledTodoID,
                items.contains(where: { $0.id == scheduledTodoID }) {
                 throw StoreError.stepAlreadyScheduled
@@ -239,7 +257,9 @@ public final class TodoStore: ObservableObject {
                 stepID: stepID
             )
             items.append(item)
-            projectItems[projectIndex].steps[stepIndex].scheduledTodoID = item.id
+            try updateStepInMemory(projectID: projectID, stepID: stepID) { step in
+                step.scheduledTodoID = item.id
+            }
             sortItems()
             return item
         }
@@ -271,6 +291,20 @@ public final class TodoStore: ObservableObject {
             return nil
         }
         return projectItems.first(where: { $0.id == projectID })?.title
+    }
+
+    public func projectPath(for item: TodoItem) -> String? {
+        guard let projectID = item.projectID,
+              let project = projectItems.first(where: { $0.id == projectID }) else {
+            return nil
+        }
+
+        guard let stepID = item.stepID,
+              let stepPath = stepPath(in: project.steps, stepID: stepID) else {
+            return project.title
+        }
+
+        return ([project.title] + stepPath).joined(separator: " / ")
     }
 
     public static func defaultStorageURL(
@@ -345,12 +379,72 @@ public final class TodoStore: ObservableObject {
         guard let projectIndex = projectItems.firstIndex(where: { $0.id == projectID }) else {
             throw StoreError.projectNotFound
         }
-        guard let stepIndex = projectItems[projectIndex].steps.firstIndex(where: { $0.id == stepID }) else {
+
+        guard try updateStep(in: &projectItems[projectIndex].steps, stepID: stepID, update) else {
             throw StoreError.stepNotFound
         }
+        sortSteps(&projectItems[projectIndex].steps)
+    }
 
-        try update(&projectItems[projectIndex].steps[stepIndex])
-        sortSteps(projectIndex: projectIndex)
+    private func updateStep(
+        in steps: inout [ProjectStep],
+        stepID: UUID,
+        _ update: (inout ProjectStep) throws -> Void
+    ) throws -> Bool {
+        for index in steps.indices {
+            if steps[index].id == stepID {
+                try update(&steps[index])
+                return true
+            }
+
+            if try updateStep(in: &steps[index].children, stepID: stepID, update) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func findStep(in steps: [ProjectStep], stepID: UUID) -> ProjectStep? {
+        for step in steps {
+            if step.id == stepID {
+                return step
+            }
+
+            if let child = findStep(in: step.children, stepID: stepID) {
+                return child
+            }
+        }
+
+        return nil
+    }
+
+    private func stepPath(in steps: [ProjectStep], stepID: UUID) -> [String]? {
+        for step in steps {
+            if step.id == stepID {
+                return [step.title]
+            }
+
+            if let childPath = stepPath(in: step.children, stepID: stepID) {
+                return [step.title] + childPath
+            }
+        }
+
+        return nil
+    }
+
+    private func removeStepInMemory(from steps: inout [ProjectStep], stepID: UUID) throws -> ProjectStep {
+        if let index = steps.firstIndex(where: { $0.id == stepID }) {
+            return steps.remove(at: index)
+        }
+
+        for index in steps.indices {
+            if let removed = try? removeStepInMemory(from: &steps[index].children, stepID: stepID) {
+                return removed
+            }
+        }
+
+        throw StoreError.stepNotFound
     }
 
     private func save() throws {
@@ -378,7 +472,15 @@ public final class TodoStore: ObservableObject {
     }
 
     private func sortSteps(projectIndex: Int) {
-        projectItems[projectIndex].steps.sort { lhs, rhs in
+        sortSteps(&projectItems[projectIndex].steps)
+    }
+
+    private func sortSteps(_ steps: inout [ProjectStep]) {
+        for index in steps.indices {
+            sortSteps(&steps[index].children)
+        }
+
+        steps.sort { lhs, rhs in
             if lhs.isCompleted != rhs.isCompleted {
                 return !lhs.isCompleted
             }
@@ -426,4 +528,12 @@ public final class TodoStore: ObservableObject {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+}
+
+private extension ProjectStep {
+    var scheduledTodoIDs: [UUID] {
+        var ids = scheduledTodoID.map { [$0] } ?? []
+        ids.append(contentsOf: children.flatMap(\.scheduledTodoIDs))
+        return ids
+    }
 }
