@@ -35,6 +35,18 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
             total + step.completedStepCount
         }
     }
+
+    public var openStepCount: Int {
+        steps.reduce(0) { total, step in
+            total + step.openStepCount
+        }
+    }
+
+    public var unscheduledOpenStepCount: Int {
+        steps.reduce(0) { total, step in
+            total + step.unscheduledOpenStepCount
+        }
+    }
 }
 
 public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
@@ -45,6 +57,8 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
     public var completedAt: Date?
     public var scheduledTodoID: UUID?
     public var children: [ProjectStep]
+    public var weeklyReportStatus: WeeklyReportStatus
+    public var weeklyReportNote: String?
 
     public init(
         id: UUID = UUID(),
@@ -53,7 +67,9 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         completedAt: Date? = nil,
         scheduledTodoID: UUID? = nil,
-        children: [ProjectStep] = []
+        children: [ProjectStep] = [],
+        weeklyReportStatus: WeeklyReportStatus = .normal,
+        weeklyReportNote: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -62,6 +78,8 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         self.completedAt = completedAt
         self.scheduledTodoID = scheduledTodoID
         self.children = children
+        self.weeklyReportStatus = weeklyReportStatus
+        self.weeklyReportNote = weeklyReportNote
     }
 
     public var totalStepCount: Int {
@@ -76,6 +94,19 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    public var openStepCount: Int {
+        (isCompleted ? 0 : 1) + children.reduce(0) { total, child in
+            total + child.openStepCount
+        }
+    }
+
+    public var unscheduledOpenStepCount: Int {
+        let ownCount = !isCompleted && scheduledTodoID == nil ? 1 : 0
+        return ownCount + children.reduce(0) { total, child in
+            total + child.unscheduledOpenStepCount
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case title
@@ -84,6 +115,8 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         case completedAt
         case scheduledTodoID
         case children
+        case weeklyReportStatus
+        case weeklyReportNote
     }
 
     public init(from decoder: Decoder) throws {
@@ -95,5 +128,7 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         self.completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
         self.scheduledTodoID = try container.decodeIfPresent(UUID.self, forKey: .scheduledTodoID)
         self.children = try container.decodeIfPresent([ProjectStep].self, forKey: .children) ?? []
+        self.weeklyReportStatus = try container.decodeIfPresent(WeeklyReportStatus.self, forKey: .weeklyReportStatus) ?? .normal
+        self.weeklyReportNote = try container.decodeIfPresent(String.self, forKey: .weeklyReportNote)
     }
 }

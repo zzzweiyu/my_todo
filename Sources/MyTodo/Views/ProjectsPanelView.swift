@@ -6,9 +6,29 @@ private enum ProjectFocusField: Hashable {
     case step(UUID)
 }
 
+private enum ProjectStepFilter: String, CaseIterable, Identifiable {
+    case all
+    case open
+    case unscheduled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "全部"
+        case .open:
+            return "未完成"
+        case .unscheduled:
+            return "未安排"
+        }
+    }
+}
+
 struct ProjectsPanelView: View {
     @ObservedObject var store: TodoStore
     @AppStorage("myTodo.showArchivedProjects") private var showArchivedProjects = false
+    @AppStorage("myTodo.projectStepFilter") private var projectStepFilterRaw = ProjectStepFilter.all.rawValue
     @State private var newProjectTitle = ""
     @State private var newStepTitles: [UUID: String] = [:]
     @State private var projectDraftTitles: [UUID: String] = [:]
@@ -39,6 +59,8 @@ struct ProjectsPanelView: View {
             header
 
             projectCaptureSection
+
+            stepFilterBar
 
             Divider()
 
@@ -140,16 +162,41 @@ struct ProjectsPanelView: View {
         .lineLimit(1)
     }
 
+    private var stepFilterBar: some View {
+        HStack(spacing: 8) {
+            Picker("步骤范围", selection: projectStepFilterBinding) {
+                ForEach(ProjectStepFilter.allCases) { filter in
+                    Text(filter.title).tag(filter.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            Text(stepFilterSummaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(minWidth: 78, alignment: .trailing)
+        }
+    }
+
     private func projectSection(_ project: Project) -> some View {
         DisclosureGroup(isExpanded: expandedBinding(for: project.id)) {
             VStack(alignment: .leading, spacing: 8) {
+                let visibleSteps = filteredSteps(project.steps)
+
                 if project.steps.isEmpty {
                     Text("还没有步骤")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 24)
+                } else if visibleSteps.isEmpty {
+                    Text(stepFilterEmptyText)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 24)
                 } else {
-                    ForEach(project.steps) { step in
+                    ForEach(visibleSteps) { step in
                         stepNode(step, project: project)
                     }
                 }
@@ -220,11 +267,13 @@ struct ProjectsPanelView: View {
     @ViewBuilder
     private func stepNode(_ step: ProjectStep, project: Project) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            let visibleChildren = step.children
+
             stepRow(step, project: project, depth: 0)
 
-            if !step.children.isEmpty || expandedStepIDs.contains(step.id) {
-                if !step.children.isEmpty {
-                    ForEach(step.children) { child in
+            if !visibleChildren.isEmpty || expandedStepIDs.contains(step.id) {
+                if !visibleChildren.isEmpty {
+                    ForEach(visibleChildren) { child in
                         childStepNode(child, project: project)
                     }
                 }
@@ -237,11 +286,13 @@ struct ProjectsPanelView: View {
     @ViewBuilder
     private func childStepNode(_ step: ProjectStep, project: Project) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            let visibleChildren = step.children
+
             stepRow(step, project: project, depth: 1)
 
-            if !step.children.isEmpty || expandedStepIDs.contains(step.id) {
-                if !step.children.isEmpty {
-                    ForEach(step.children) { child in
+            if !visibleChildren.isEmpty || expandedStepIDs.contains(step.id) {
+                if !visibleChildren.isEmpty {
+                    ForEach(visibleChildren) { child in
                         grandchildStepNode(child, project: project)
                     }
                 }
@@ -315,7 +366,7 @@ struct ProjectsPanelView: View {
             if project.steps.isEmpty {
                 stepsHeight = 20
             } else {
-                stepsHeight = estimatedStepsHeight(project.steps, depth: 0)
+                stepsHeight = estimatedStepsHeight(filteredSteps(project.steps), depth: 0)
             }
 
             height += 6 + stepsHeight + 8 + 36
@@ -367,6 +418,13 @@ struct ProjectsPanelView: View {
                 .help("添加子任务")
             }
 
+            WeeklyReportTagButton(
+                status: step.weeklyReportStatus,
+                note: step.weeklyReportNote
+            ) { status, note in
+                updateStepWeeklyReportMetadata(step, project: project, status: status, note: note)
+            }
+
             Button {
                 schedule(step, project: project)
             } label: {
@@ -407,6 +465,72 @@ struct ProjectsPanelView: View {
         }
 
         return "\(project.completedStepCount)/\(project.totalStepCount) 已完成"
+    }
+
+    private var projectStepFilter: ProjectStepFilter {
+        ProjectStepFilter(rawValue: projectStepFilterRaw) ?? .all
+    }
+
+    private var projectStepFilterBinding: Binding<String> {
+        Binding {
+            projectStepFilter.rawValue
+        } set: { value in
+            projectStepFilterRaw = value
+        }
+    }
+
+    private var stepFilterSummaryText: String {
+        let projects = visibleProjects
+
+        switch projectStepFilter {
+        case .all:
+            let total = projects.reduce(0) { $0 + $1.totalStepCount }
+            return "\(total) 个步骤"
+        case .open:
+            let total = projects.reduce(0) { $0 + $1.openStepCount }
+            return "\(total) 个未完成"
+        case .unscheduled:
+            let total = projects.reduce(0) { $0 + $1.unscheduledOpenStepCount }
+            return "\(total) 个未安排"
+        }
+    }
+
+    private var stepFilterEmptyText: String {
+        switch projectStepFilter {
+        case .all:
+            return "没有可显示的步骤"
+        case .open:
+            return "没有未完成步骤"
+        case .unscheduled:
+            return "没有未安排步骤"
+        }
+    }
+
+    private func filteredSteps(_ steps: [ProjectStep]) -> [ProjectStep] {
+        steps.compactMap(filteredStep)
+    }
+
+    private func filteredStep(_ step: ProjectStep) -> ProjectStep? {
+        let children = filteredSteps(step.children)
+
+        guard stepMatchesCurrentFilter(step) || !children.isEmpty else {
+            return nil
+        }
+
+        var visibleStep = step
+        visibleStep.children = children
+        return visibleStep
+    }
+
+    private func stepMatchesCurrentFilter(_ step: ProjectStep) -> Bool {
+        switch projectStepFilter {
+        case .all:
+            return true
+        case .open:
+            return !step.isCompleted
+        case .unscheduled:
+            return !step.isCompleted && step.scheduledTodoID == nil
+        }
     }
 
     private func nextActionableStep(in project: Project) -> ProjectStep? {
@@ -668,6 +792,27 @@ struct ProjectsPanelView: View {
         } catch {
             successMessage = nil
             errorMessage = "无法删除步骤。"
+        }
+    }
+
+    private func updateStepWeeklyReportMetadata(
+        _ step: ProjectStep,
+        project: Project,
+        status: WeeklyReportStatus,
+        note: String?
+    ) {
+        do {
+            try store.updateStepWeeklyReportMetadata(
+                projectID: project.id,
+                stepID: step.id,
+                status: status,
+                note: note
+            )
+            successMessage = "已更新周报标记"
+            errorMessage = nil
+        } catch {
+            successMessage = nil
+            errorMessage = "无法更新周报标记。"
         }
     }
 }

@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 周报与周任务视图 PRD</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #15181d;
+      --muted: #5f6875;
+      --subtle: #8b94a1;
+      --line: #e3e7ee;
+      --panel: #ffffff;
+      --paper: #f6f8fb;
+      --blue: #2563eb;
+      --blue-soft: #e8f0ff;
+      --green: #16a34a;
+      --amber: #d97706;
+      --red: #dc2626;
+      --radius: 8px;
+      --shadow: 0 16px 40px rgba(25, 35, 60, 0.10);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.65;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 22px;
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.78);
+      backdrop-filter: blur(18px);
+    }
+
+    .sidebar h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .sidebar p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .sidebar a {
+      display: block;
+      padding: 8px 10px;
+      margin: 2px 0;
+      color: #374151;
+      border-radius: 7px;
+      font-size: 14px;
+    }
+
+    .sidebar a:hover {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .content {
+      padding: 40px clamp(24px, 5vw, 72px) 72px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+      gap: 28px;
+      align-items: center;
+      max-width: 1180px;
+      margin: 0 auto 34px;
+    }
+
+    .hero-copy {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .hero h2 {
+      margin: 0;
+      max-width: 760px;
+      font-size: clamp(34px, 5vw, 60px);
+      line-height: 1.04;
+      letter-spacing: 0;
+    }
+
+    .hero .lede {
+      margin: 18px 0 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .hero-visual {
+      min-width: 0;
+    }
+
+    .hero-visual img,
+    .figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      background: #fff;
+    }
+
+    .section {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 34px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section:first-of-type {
+      border-top: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 28px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul,
+    ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 22px;
+      align-items: start;
+    }
+
+    .card {
+      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .metric {
+      min-height: 132px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 10px;
+      font-size: 34px;
+      line-height: 1;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .tag.green {
+      background: #e9f8ef;
+      color: var(--green);
+    }
+
+    .tag.amber {
+      background: #fff4dd;
+      color: var(--amber);
+    }
+
+    .tag.red {
+      background: #fff0f0;
+      color: var(--red);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .flow-step {
+      position: relative;
+      padding: 14px;
+      min-height: 116px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .flow-step::after {
+      content: "→";
+      position: absolute;
+      right: -11px;
+      top: 40%;
+      color: var(--subtle);
+      font-weight: 700;
+    }
+
+    .flow-step:last-child::after {
+      content: "";
+    }
+
+    .flow-step b {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .figure {
+      margin: 0;
+    }
+
+    .figcaption {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .table th,
+    .table td {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    .table th {
+      width: 26%;
+      color: #374151;
+      background: #f9fafb;
+      font-weight: 700;
+    }
+
+    .table tr:last-child th,
+    .table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .code {
+      padding: 14px 16px;
+      overflow: auto;
+      color: #172033;
+      background: #eef2f7;
+      border: 1px solid #d9e0ea;
+      border-radius: var(--radius);
+      font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .callout {
+      padding: 14px 16px;
+      background: #fff8e7;
+      border: 1px solid #f2d79d;
+      border-radius: var(--radius);
+      color: #6f4b00;
+    }
+
+    .checklist {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .checklist li {
+      margin: 0;
+      padding: 14px 14px 14px 42px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      position: relative;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 14px;
+      top: 13px;
+      width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--green);
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .hero,
+      .two-col,
+      .grid,
+      .flow,
+      .checklist {
+        grid-template-columns: 1fr;
+      }
+
+      .flow-step::after {
+        content: "";
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="sidebar" aria-label="文档导航">
+      <h1>AI 周报 PRD</h1>
+      <p>MyTodo · 产品评审版</p>
+      <a href="#overview">概览</a>
+      <a href="#goals">目标与范围</a>
+      <a href="#ia">信息架构</a>
+      <a href="#prototype">原型与交互</a>
+      <a href="#data-ai">数据与 AI</a>
+      <a href="#errors">错误状态</a>
+      <a href="#acceptance">验收标准</a>
+    </div>
+
+    <div class="content">
+      <div class="hero" id="overview">
+        <div class="hero-copy">
+          <p class="eyebrow">Product Requirements Document</p>
+          <h2>AI 周报与周任务视图</h2>
+          <p class="lede">在现有「今天 / 项目」待办工作流上新增「本周」视图，让周报来自真实任务记录：自动聚合完成项、卡点和待跟进事项，并生成可复核、可编辑、可复制的 Markdown 周报草稿。</p>
+        </div>
+        <div class="hero-visual">
+          <img src="assets/weekly-overview-prototype.png" alt="本周视图高保真原型，展示周统计、任务分组和生成 AI 周报按钮">
+        </div>
+      </div>
+
+      <div class="section" id="goals">
+        <h2>目标与范围</h2>
+        <div class="grid">
+          <div class="card metric">
+            <span>核心目标</span>
+            <strong>少写</strong>
+            <p class="muted">用户不再从零整理周报，只维护日常任务和少量周报标记。</p>
+          </div>
+          <div class="card metric">
+            <span>可信来源</span>
+            <strong>可追溯</strong>
+            <p class="muted">每段 AI 总结都能回到任务、项目路径和备注证据。</p>
+          </div>
+          <div class="card metric">
+            <span>交付形态</span>
+            <strong>草稿</strong>
+            <p class="muted">第一版只生成可编辑草稿，不自动发送或同步到外部系统。</p>
+          </div>
+        </div>
+        <div class="two-col" style="margin-top:22px">
+          <div class="card">
+            <h3>本期包含</h3>
+            <ul>
+              <li>新增「本周」顶层视图，默认统计周一到周日。</li>
+              <li>任务和项目步骤支持「普通 / 卡点 / 待跟进」标记与一句备注。</li>
+              <li>应用内 AI 生成 Markdown 周报，用户可编辑、重新生成、复制。</li>
+              <li>支持选择大模型厂商，首期包含 OpenAI、阿里云百炼、阿里云 Coding Plan 与 DeepSeek；模型名与服务地址可手动填写。</li>
+              <li>大模型配置与 API Key 使用 macOS Keychain 保存，不写入本地任务数据库。</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>本期不包含</h3>
+            <ul>
+              <li>负责人、优先级、截止日期等重项目管理字段。</li>
+              <li>周报自动发送、定时生成、团队协作或外部同步。</li>
+              <li>多模板体系；第一版固定三段式 Markdown。</li>
+              <li>跨设备云同步或账号体系。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="section" id="ia">
+        <h2>信息架构</h2>
+        <p>顶层导航从「今天 / 项目」扩展为「今天 / 项目 / 本周」。三者职责保持清晰：今天用于执行，项目用于拆解长期目标，本周用于复盘、跟进和生成周报。</p>
+        <div class="flow" aria-label="核心使用流程">
+          <div class="flow-step">
+            <b>1. 记录任务</b>
+            <p>在今天或项目中继续记录任务和步骤。</p>
+          </div>
+          <div class="flow-step">
+            <b>2. 标记证据</b>
+            <p>对关键任务补充卡点、待跟进和备注。</p>
+          </div>
+          <div class="flow-step">
+            <b>3. 查看本周</b>
+            <p>按自然周聚合完成、卡点和待跟进。</p>
+          </div>
+          <div class="flow-step">
+            <b>4. 生成草稿</b>
+            <p>AI 基于结构化任务上下文生成三段式周报。</p>
+          </div>
+          <div class="flow-step">
+            <b>5. 复核复制</b>
+            <p>用户编辑确认后复制 Markdown 对外发送。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="section" id="prototype">
+        <h2>原型与交互</h2>
+        <div class="two-col">
+          <div class="figure">
+            <img src="assets/task-report-tagging-prototype.png" alt="任务周报标记交互原型，展示普通、卡点、待跟进和周报备注">
+            <div class="figcaption">任务标记：用轻量标签和备注提升 AI 周报准确度。</div>
+          </div>
+          <div class="card">
+            <h3>本周主视图</h3>
+            <ul>
+              <li>顶部显示自然周范围，支持上一周/下一周切换，默认停留当前周。</li>
+              <li>指标区展示完成数、卡点数、待跟进数、完成率。</li>
+              <li>任务证据列表按「待完成 / 卡点 / 待跟进 / 已完成」分组。</li>
+              <li>任务行保留项目路径，减少 AI 输出时丢失背景。</li>
+              <li>主按钮为「生成 AI 周报」，生成后进入草稿弹层。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="two-col" style="margin-top:22px">
+          <div class="card">
+            <h3>周报草稿弹层</h3>
+            <ul>
+              <li>弹层标题为「AI 周报草稿」，展示本次生成基于多少完成项、卡点和待跟进。</li>
+              <li>正文为可编辑 Markdown 文本区，固定三段：「本周完成」「卡点风险」「下周跟进」。</li>
+              <li>侧边或正文下方展示参考依据，用户能回看 AI 使用了哪些任务。</li>
+              <li>操作包含「重新生成」「复制 Markdown」「保存草稿」。</li>
+              <li>复制前提示用户确认内容准确，避免把 AI 草稿当成最终事实。</li>
+            </ul>
+          </div>
+          <div class="figure">
+            <img src="assets/ai-weekly-report-draft-prototype.png" alt="AI 周报草稿弹层原型，展示 Markdown 文本区、参考依据和复制按钮">
+            <div class="figcaption">AI 草稿：默认可编辑，用户复核后再复制。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section" id="data-ai">
+        <h2>数据与 AI 方案</h2>
+        <div class="two-col">
+          <div>
+            <h3>建议新增数据</h3>
+            <table class="table">
+              <tr>
+                <th>weeklyReportStatus</th>
+                <td>枚举：normal、blocker、followUp。默认 normal，用于本周分组和 AI 分类。</td>
+              </tr>
+              <tr>
+                <th>weeklyReportNote</th>
+                <td>可选字符串。一句话说明背景、影响或后续动作，作为 AI 周报证据。</td>
+              </tr>
+              <tr>
+                <th>completedAt</th>
+                <td>沿用现有完成时间。已完成任务按完成时间进入对应自然周。</td>
+              </tr>
+              <tr>
+                <th>project path</th>
+                <td>沿用现有项目/步骤路径，输出上下文如「项目 A / 后端服务 / 接口层」。</td>
+              </tr>
+            </table>
+          </div>
+          <div>
+            <h3>AI 上下文结构</h3>
+            <div class="code">weekRange:
+  start: 2026-05-25
+  end: 2026-05-31
+completed:
+  - title
+  - projectPath
+  - completedAt
+blockers:
+  - title
+  - projectPath
+  - weeklyReportNote
+followUps:
+  - title
+  - projectPath
+  - weeklyReportNote
+output:
+  format: Markdown
+  sections:
+    - 本周完成
+    - 卡点风险
+    - 下周跟进</div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:22px">
+          <h3>生成原则</h3>
+          <p>AI 只基于本周结构化任务上下文生成，不编造项目、时间、负责人或结果。没有证据的内容不写入草稿；备注为空时，AI 可以使用任务标题和项目路径做简短归纳，但不得扩展未记录的事实。</p>
+        </div>
+      </div>
+
+      <div class="section" id="errors">
+        <h2>错误状态与隐私</h2>
+        <div class="grid">
+          <div class="card">
+            <span class="tag amber">未配置</span>
+            <h3>缺少大模型配置</h3>
+            <p>生成按钮可见但提示配置入口。厂商、模型名与 Key 存入 macOS Keychain，不进入任务 JSON。</p>
+          </div>
+          <div class="card">
+            <span class="tag red">失败</span>
+            <h3>网络或鉴权失败</h3>
+            <p>显示可理解的失败原因，不清空任务、备注或现有草稿。</p>
+          </div>
+          <div class="card">
+            <span class="tag green">可恢复</span>
+            <h3>重新生成</h3>
+            <p>重新生成前保留当前草稿，避免覆盖用户已编辑内容。</p>
+          </div>
+        </div>
+        <p class="callout" style="margin-top:18px">默认不自动发送周报。所有 AI 输出均为草稿，复制前需要用户确认内容准确。</p>
+      </div>
+
+      <div class="section" id="acceptance">
+        <h2>验收标准</h2>
+        <ul class="checklist">
+          <li>周一到周日范围统计正确，跨周任务不误入本周。</li>
+          <li>已完成任务按 <code>completedAt</code> 进入「本周完成」。</li>
+          <li>标记为卡点或待跟进的任务进入对应分组，并带项目路径和备注。</li>
+          <li>未配置大模型厂商/API Key 时不能生成，显示配置入口。</li>
+          <li>大模型配置支持 OpenAI、阿里云百炼、阿里云 Coding Plan 与 DeepSeek，模型名和服务地址可按用户实际账号权限调整。</li>
+          <li>AI 生成成功后展示 Markdown 草稿，支持编辑、重新生成、复制。</li>
+          <li>网络或 API 失败时保留用户数据，不清空已有草稿。</li>
+          <li>周报输出固定三段：「本周完成」「卡点风险」「下周跟进」。</li>
+          <li>PRD 第一版不引入负责人、优先级、截止日期、自动发送或团队同步。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

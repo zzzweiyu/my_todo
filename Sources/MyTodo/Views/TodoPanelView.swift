@@ -4,6 +4,7 @@ import TodoCore
 struct TodoPanelView: View {
     @ObservedObject var store: TodoStore
     @State private var selectedTab: PanelTab = .today
+    private let dayRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,16 +27,30 @@ struct TodoPanelView: View {
                 TodayPanelView(store: store)
             case .projects:
                 ProjectsPanelView(store: store)
+            case .week:
+                WeekPanelView(store: store)
+            case .archive:
+                ArchivePanelView(store: store)
             }
         }
         .padding(14)
         .frame(width: 380)
+        .onAppear(perform: refreshForCurrentDay)
+        .onReceive(dayRefreshTimer) { _ in
+            refreshForCurrentDay()
+        }
+    }
+
+    private func refreshForCurrentDay() {
+        _ = try? store.refreshForCurrentDay()
     }
 }
 
 private enum PanelTab: String, CaseIterable, Identifiable {
     case today
     case projects
+    case week
+    case archive
 
     var id: String { rawValue }
 
@@ -45,7 +60,10 @@ private enum PanelTab: String, CaseIterable, Identifiable {
             return "今天"
         case .projects:
             return "项目"
+        case .week:
+            return "本周"
+        case .archive:
+            return "历史"
         }
     }
 }
-

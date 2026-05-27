@@ -1,6 +1,13 @@
 import SwiftUI
 import TodoCore
 
+private struct TodayTaskGroup: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let items: [TodoItem]
+}
+
 struct TodayPanelView: View {
     @ObservedObject var store: TodoStore
     @AppStorage("myTodo.showCompleted") private var showCompleted = true
@@ -13,6 +20,51 @@ struct TodayPanelView: View {
 
     private var visibleItems: [TodoItem] {
         store.todayItems(showCompleted: showCompleted)
+    }
+
+    private var visibleGroups: [TodayTaskGroup] {
+        var groups: [TodayTaskGroup] = []
+
+        let temporaryItems = visibleItems.filter { $0.projectID == nil }
+        if !temporaryItems.isEmpty {
+            groups.append(TodayTaskGroup(
+                id: "temporary",
+                title: "临时任务",
+                detail: groupDetail(for: temporaryItems),
+                items: temporaryItems
+            ))
+        }
+
+        var projectOrder: [UUID] = []
+        var projectItems: [UUID: [TodoItem]] = [:]
+
+        for item in visibleItems {
+            guard let projectID = item.projectID else {
+                continue
+            }
+
+            if projectItems[projectID] == nil {
+                projectOrder.append(projectID)
+                projectItems[projectID] = []
+            }
+
+            projectItems[projectID, default: []].append(item)
+        }
+
+        for projectID in projectOrder {
+            guard let items = projectItems[projectID], let firstItem = items.first else {
+                continue
+            }
+
+            groups.append(TodayTaskGroup(
+                id: "project-\(projectID.uuidString)",
+                title: store.projectPathComponents(for: firstItem)?.first ?? "项目",
+                detail: groupDetail(for: items),
+                items: items
+            ))
+        }
+
+        return groups
     }
 
     private var openCount: Int {
@@ -40,12 +92,16 @@ struct TodayPanelView: View {
     }
 
     private var todayListHeight: CGFloat {
-        let rowsHeight = visibleItems.reduce(CGFloat.zero) { total, item in
-            total + (store.projectTitle(for: item) == nil ? 48 : 64)
+        let groupsHeight = visibleGroups.reduce(CGFloat.zero) { total, group in
+            let rowsHeight = group.items.reduce(CGFloat.zero) { rowTotal, item in
+                rowTotal + (rowContext(for: item) == nil ? 48 : 64)
+            }
+            let rowSpacing = CGFloat(max(group.items.count - 1, 0)) * 4
+            return total + 28 + rowsHeight + rowSpacing
         }
-        let spacingHeight = CGFloat(max(visibleItems.count - 1, 0)) * 4
+        let groupSpacing = CGFloat(max(visibleGroups.count - 1, 0)) * 10
 
-        return min(rowsHeight + spacingHeight, 420)
+        return min(groupsHeight + groupSpacing, 420)
     }
 
     var body: some View {
@@ -62,18 +118,9 @@ struct TodayPanelView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(visibleItems) { item in
-                            TodoRowView(
-                                item: item,
-                                title: binding(for: item),
-                                projectTitle: store.projectPath(for: item),
-                                deleteHelp: item.projectID == nil ? "删除任务" : "取消今日安排",
-                                isHighlighted: item.id == recentlyAddedTaskID,
-                                onToggle: { setCompleted(item, isCompleted: !item.isCompleted) },
-                                onCommitTitle: { commitTitle(for: item) },
-                                onDelete: { delete(item) }
-                            )
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(visibleGroups) { group in
+                            taskGroupSection(group)
                         }
                     }
                 }
@@ -191,6 +238,43 @@ struct TodayPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    private func taskGroupSection(_ group: TodayTaskGroup) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(group.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Text(group.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 4)
+
+            LazyVStack(spacing: 4) {
+                ForEach(group.items) { item in
+                    TodoRowView(
+                        item: item,
+                        title: binding(for: item),
+                        projectTitle: rowContext(for: item),
+                        deleteHelp: item.projectID == nil ? "删除任务" : "取消今日安排",
+                        isHighlighted: item.id == recentlyAddedTaskID,
+                        onToggle: { setCompleted(item, isCompleted: !item.isCompleted) },
+                        onCommitTitle: { commitTitle(for: item) },
+                        onDelete: { delete(item) },
+                        onUpdateWeeklyReport: { status, note in
+                            updateWeeklyReportMetadata(for: item, status: status, note: note)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     private var trimmedNewTaskTitle: String {
         newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -217,6 +301,25 @@ struct TodayPanelView: View {
         }
 
         return "完成 \(completedCount)/\(totalCount)，剩余 \(openCount)"
+    }
+
+    private func groupDetail(for items: [TodoItem]) -> String {
+        let openItems = items.filter { !$0.isCompleted }.count
+
+        if showCompleted {
+            return openItems == 0 ? "\(items.count) 项全部完成" : "\(openItems)/\(items.count) 未完成"
+        }
+
+        return "\(openItems) 个未完成"
+    }
+
+    private func rowContext(for item: TodoItem) -> String? {
+        guard let pathComponents = store.projectPathComponents(for: item), pathComponents.count > 2 else {
+            return nil
+        }
+
+        let parentPath = pathComponents.dropFirst().dropLast().joined(separator: " / ")
+        return parentPath.isEmpty ? nil : parentPath
     }
 
     private func binding(for item: TodoItem) -> Binding<String> {
@@ -326,6 +429,17 @@ struct TodayPanelView: View {
             errorMessage = nil
         } catch {
             errorMessage = "无法删除任务。"
+        }
+    }
+
+    private func updateWeeklyReportMetadata(for item: TodoItem, status: WeeklyReportStatus, note: String?) {
+        do {
+            try store.updateWeeklyReportMetadata(item.id, status: status, note: note)
+            errorMessage = nil
+            successMessage = "已更新周报标记"
+        } catch {
+            successMessage = nil
+            errorMessage = "无法更新周报标记。"
         }
     }
 }

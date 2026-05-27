@@ -1,6 +1,76 @@
 import Combine
 import Foundation
 
+public struct WeekRange: Equatable, Sendable {
+    public let startDay: String
+    public let endDay: String
+
+    public init(startDay: String, endDay: String) {
+        self.startDay = startDay
+        self.endDay = endDay
+    }
+
+    public func contains(day: String) -> Bool {
+        startDay <= day && day <= endDay
+    }
+}
+
+public struct WeeklyEvidenceItem: Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let title: String
+    public let projectPath: String?
+    public let status: WeeklyReportStatus
+    public let note: String?
+    public let isCompleted: Bool
+    public let day: String?
+    public let completedAt: Date?
+}
+
+public struct WeeklySummary: Equatable, Sendable {
+    public let range: WeekRange
+    public let evidence: [WeeklyEvidenceItem]
+
+    public init(range: WeekRange, evidence: [WeeklyEvidenceItem]) {
+        self.range = range
+        self.evidence = evidence.sorted(by: Self.sortEvidence)
+    }
+
+    public var open: [WeeklyEvidenceItem] {
+        evidence.filter { !$0.isCompleted }
+    }
+
+    public var completed: [WeeklyEvidenceItem] {
+        evidence.filter(\.isCompleted)
+    }
+
+    public var blockers: [WeeklyEvidenceItem] {
+        evidence.filter { $0.status == .blocker }
+    }
+
+    public var followUps: [WeeklyEvidenceItem] {
+        evidence.filter { $0.status == .followUp }
+    }
+
+    public var completionFraction: Double {
+        guard !evidence.isEmpty else {
+            return 0
+        }
+        return Double(completed.count) / Double(evidence.count)
+    }
+
+    private static func sortEvidence(_ lhs: WeeklyEvidenceItem, _ rhs: WeeklyEvidenceItem) -> Bool {
+        if lhs.isCompleted != rhs.isCompleted {
+            return !lhs.isCompleted
+        }
+        let lhsDate = lhs.completedAt ?? .distantPast
+        let rhsDate = rhs.completedAt ?? .distantPast
+        if lhsDate != rhsDate {
+            return lhsDate < rhsDate
+        }
+        return lhs.title < rhs.title
+    }
+}
+
 public final class TodoStore: ObservableObject {
     public enum StoreError: Error, Equatable {
         case blankTitle
@@ -12,6 +82,7 @@ public final class TodoStore: ObservableObject {
 
     @Published public private(set) var items: [TodoItem]
     @Published public private(set) var projectItems: [Project]
+    @Published public private(set) var weeklyReportDrafts: [WeeklyReportDraft]
 
     private let storageURL: URL
     private let today: () -> String
@@ -33,6 +104,7 @@ public final class TodoStore: ObservableObject {
         let loaded = try Self.loadDatabase(from: storageURL)
         self.items = loaded.database.todos
         self.projectItems = loaded.database.projects
+        self.weeklyReportDrafts = loaded.database.weeklyReportDrafts
 
         let rolledForward = rollOpenItemsForwardIfNeeded()
         if loaded.needsSave || rolledForward {
@@ -86,6 +158,29 @@ public final class TodoStore: ObservableObject {
         }
     }
 
+    public func updateWeeklyReportMetadata(
+        _ id: UUID,
+        status: WeeklyReportStatus,
+        note: String?
+    ) throws {
+        let cleanNote = normalizedOptionalNote(note)
+        try mutate {
+            guard let index = items.firstIndex(where: { $0.id == id }) else {
+                throw StoreError.itemNotFound
+            }
+
+            items[index].weeklyReportStatus = status
+            items[index].weeklyReportNote = cleanNote
+
+            if let projectID = items[index].projectID, let stepID = items[index].stepID {
+                try updateStepInMemory(projectID: projectID, stepID: stepID) { step in
+                    step.weeklyReportStatus = status
+                    step.weeklyReportNote = cleanNote
+                }
+            }
+        }
+    }
+
     public func delete(_ id: UUID) throws {
         try mutate {
             guard let index = items.firstIndex(where: { $0.id == id }) else {
@@ -120,6 +215,47 @@ public final class TodoStore: ObservableObject {
 
             let completedIDs = Set(completedItems.map(\.id))
             items.removeAll { completedIDs.contains($0.id) }
+        }
+    }
+
+    public func restoreArchivedItemToToday(_ id: UUID) throws {
+        try mutate {
+            let currentDay = today()
+            guard let index = items.firstIndex(where: { $0.id == id && $0.isCompleted && $0.day != currentDay }) else {
+                throw StoreError.itemNotFound
+            }
+
+            items[index].day = currentDay
+            items[index].isCompleted = false
+            items[index].completedAt = nil
+
+            if let projectID = items[index].projectID, let stepID = items[index].stepID {
+                try updateStepInMemory(projectID: projectID, stepID: stepID) { step in
+                    step.isCompleted = false
+                    step.completedAt = nil
+                    step.scheduledTodoID = id
+                }
+            }
+
+            sortItems()
+        }
+    }
+
+    @discardableResult
+    public func refreshForCurrentDay() throws -> Bool {
+        let previousItems = items
+        let previousProjects = projectItems
+
+        do {
+            let changed = rollOpenItemsForwardIfNeeded()
+            if changed {
+                try save()
+            }
+            return changed
+        } catch {
+            items = previousItems
+            projectItems = previousProjects
+            throw error
         }
     }
 
@@ -232,6 +368,27 @@ public final class TodoStore: ObservableObject {
         }
     }
 
+    public func updateStepWeeklyReportMetadata(
+        projectID: UUID,
+        stepID: UUID,
+        status: WeeklyReportStatus,
+        note: String?
+    ) throws {
+        let cleanNote = normalizedOptionalNote(note)
+        try mutate {
+            try updateStepInMemory(projectID: projectID, stepID: stepID) { step in
+                step.weeklyReportStatus = status
+                step.weeklyReportNote = cleanNote
+
+                if let scheduledTodoID = step.scheduledTodoID,
+                   let todoIndex = items.firstIndex(where: { $0.id == scheduledTodoID }) {
+                    items[todoIndex].weeklyReportStatus = status
+                    items[todoIndex].weeklyReportNote = cleanNote
+                }
+            }
+        }
+    }
+
     @discardableResult
     public func scheduleStepForToday(projectID: UUID, stepID: UUID) throws -> TodoItem {
         try mutate {
@@ -294,6 +451,10 @@ public final class TodoStore: ObservableObject {
     }
 
     public func projectPath(for item: TodoItem) -> String? {
+        projectPathComponents(for: item)?.joined(separator: " / ")
+    }
+
+    public func projectPathComponents(for item: TodoItem) -> [String]? {
         guard let projectID = item.projectID,
               let project = projectItems.first(where: { $0.id == projectID }) else {
             return nil
@@ -301,10 +462,76 @@ public final class TodoStore: ObservableObject {
 
         guard let stepID = item.stepID,
               let stepPath = stepPath(in: project.steps, stepID: stepID) else {
-            return project.title
+            return [project.title]
         }
 
-        return ([project.title] + stepPath).joined(separator: " / ")
+        return [project.title] + stepPath
+    }
+
+    public func weeklySummary(containing day: String? = nil) -> WeeklySummary {
+        let range = Self.weekRange(containing: day ?? today())
+        let todoEvidence = items.compactMap { weeklyEvidence(for: $0, range: range) }
+        let scheduledTodoIDs = Set(items.map(\.id))
+        let projectEvidence = projectItems
+            .filter { !$0.isArchived }
+            .flatMap { project in
+                weeklyEvidence(
+                    for: project.steps,
+                    projectTitle: project.title,
+                    parentPath: [],
+                    range: range,
+                    scheduledTodoIDs: scheduledTodoIDs
+                )
+            }
+
+        return WeeklySummary(range: range, evidence: todoEvidence + projectEvidence)
+    }
+
+    public func weeklyReportDraft(weekStartDay: String) -> WeeklyReportDraft? {
+        weeklyReportDrafts.first { $0.weekStartDay == weekStartDay }
+    }
+
+    public func saveWeeklyReportDraft(weekStartDay: String, markdown: String) throws {
+        let cleanMarkdown = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        try mutate {
+            let updatedAt = now()
+            if let index = weeklyReportDrafts.firstIndex(where: { $0.weekStartDay == weekStartDay }) {
+                weeklyReportDrafts[index].markdown = cleanMarkdown
+                weeklyReportDrafts[index].updatedAt = updatedAt
+            } else {
+                weeklyReportDrafts.append(WeeklyReportDraft(
+                    weekStartDay: weekStartDay,
+                    markdown: cleanMarkdown,
+                    createdAt: updatedAt,
+                    updatedAt: updatedAt
+                ))
+            }
+            weeklyReportDrafts.sort { $0.weekStartDay < $1.weekStartDay }
+        }
+    }
+
+    public static func weekRange(containing day: String) -> WeekRange {
+        guard let date = date(fromDay: day) else {
+            return WeekRange(startDay: day, endDay: day)
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
+        calendar.timeZone = .current
+
+        let weekday = calendar.component(.weekday, from: date)
+        let daysFromMonday = (weekday + 5) % 7
+        let startDate = calendar.date(byAdding: .day, value: -daysFromMonday, to: date) ?? date
+        let endDate = calendar.date(byAdding: .day, value: 6, to: startDate) ?? startDate
+
+        return WeekRange(
+            startDay: dayFormatter.string(from: startDate),
+            endDay: dayFormatter.string(from: endDate)
+        )
+    }
+
+    public static func date(fromDay day: String) -> Date? {
+        dayFormatter.date(from: day)
     }
 
     public static func defaultStorageURL(
@@ -345,6 +572,7 @@ public final class TodoStore: ObservableObject {
     private func mutate<T>(_ updates: () throws -> T) throws -> T {
         let previousItems = items
         let previousProjects = projectItems
+        let previousDrafts = weeklyReportDrafts
 
         do {
             let result = try updates()
@@ -353,6 +581,7 @@ public final class TodoStore: ObservableObject {
         } catch {
             items = previousItems
             projectItems = previousProjects
+            weeklyReportDrafts = previousDrafts
             throw error
         }
     }
@@ -360,6 +589,7 @@ public final class TodoStore: ObservableObject {
     private func mutate(_ updates: () throws -> Void) throws {
         let previousItems = items
         let previousProjects = projectItems
+        let previousDrafts = weeklyReportDrafts
 
         do {
             try updates()
@@ -367,6 +597,7 @@ public final class TodoStore: ObservableObject {
         } catch {
             items = previousItems
             projectItems = previousProjects
+            weeklyReportDrafts = previousDrafts
             throw error
         }
     }
@@ -450,7 +681,11 @@ public final class TodoStore: ObservableObject {
     private func save() throws {
         let directory = storageURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let database = TodoDatabase(todos: items, projects: projectItems)
+        let database = TodoDatabase(
+            todos: items,
+            projects: projectItems,
+            weeklyReportDrafts: weeklyReportDrafts
+        )
         let data = try JSONEncoder.todoItemsEncoder.encode(database)
         try data.write(to: storageURL, options: [.atomic])
     }
@@ -461,6 +696,78 @@ public final class TodoStore: ObservableObject {
             throw StoreError.blankTitle
         }
         return cleanTitle
+    }
+
+    private func normalizedOptionalNote(_ note: String?) -> String? {
+        let cleanNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return cleanNote.isEmpty ? nil : cleanNote
+    }
+
+    private func weeklyEvidence(for item: TodoItem, range: WeekRange) -> WeeklyEvidenceItem? {
+        let completedDay = item.completedAt.map { Self.dayFormatter.string(from: $0) }
+        let isRelevant: Bool
+
+        if item.isCompleted {
+            isRelevant = completedDay.map(range.contains(day:)) ?? range.contains(day: item.day)
+        } else {
+            isRelevant = range.contains(day: item.day)
+        }
+
+        guard isRelevant else {
+            return nil
+        }
+
+        return WeeklyEvidenceItem(
+            id: item.id,
+            title: item.title,
+            projectPath: projectPath(for: item),
+            status: item.weeklyReportStatus,
+            note: item.weeklyReportNote,
+            isCompleted: item.isCompleted,
+            day: item.day,
+            completedAt: item.completedAt
+        )
+    }
+
+    private func weeklyEvidence(
+        for steps: [ProjectStep],
+        projectTitle: String,
+        parentPath: [String],
+        range: WeekRange,
+        scheduledTodoIDs: Set<UUID>
+    ) -> [WeeklyEvidenceItem] {
+        steps.flatMap { step in
+            let path = parentPath + [step.title]
+            var evidence: [WeeklyEvidenceItem] = []
+
+            if step.scheduledTodoID.map({ !scheduledTodoIDs.contains($0) }) ?? true {
+                let completedDay = step.completedAt.map { Self.dayFormatter.string(from: $0) }
+                let isCompletedInWeek = completedDay.map(range.contains(day:)) ?? false
+                let shouldInclude = isCompletedInWeek || step.weeklyReportStatus != .normal
+
+                if shouldInclude {
+                    evidence.append(WeeklyEvidenceItem(
+                        id: step.id,
+                        title: step.title,
+                        projectPath: ([projectTitle] + path).joined(separator: " / "),
+                        status: step.weeklyReportStatus,
+                        note: step.weeklyReportNote,
+                        isCompleted: step.isCompleted,
+                        day: nil,
+                        completedAt: step.completedAt
+                    ))
+                }
+            }
+
+            evidence.append(contentsOf: weeklyEvidence(
+                for: step.children,
+                projectTitle: projectTitle,
+                parentPath: path,
+                range: range,
+                scheduledTodoIDs: scheduledTodoIDs
+            ))
+            return evidence
+        }
     }
 
     private func sortItems() {
