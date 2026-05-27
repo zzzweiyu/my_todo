@@ -1,37 +1,66 @@
 import SwiftUI
 import TodoCore
 
+private enum ProjectFocusField: Hashable {
+    case project
+    case step(UUID)
+}
+
+private enum ProjectStepFilter: String, CaseIterable, Identifiable {
+    case all
+    case open
+    case unscheduled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "全部"
+        case .open:
+            return "未完成"
+        case .unscheduled:
+            return "未安排"
+        }
+    }
+}
+
 struct ProjectsPanelView: View {
     @ObservedObject var store: TodoStore
     @AppStorage("myTodo.showArchivedProjects") private var showArchivedProjects = false
+    @AppStorage("myTodo.projectStepFilter") private var projectStepFilterRaw = ProjectStepFilter.all.rawValue
     @State private var newProjectTitle = ""
     @State private var newStepTitles: [UUID: String] = [:]
     @State private var projectDraftTitles: [UUID: String] = [:]
     @State private var stepDraftTitles: [UUID: String] = [:]
     @State private var expandedProjectIDs: Set<UUID> = []
+    @State private var expandedStepIDs: Set<UUID> = []
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @FocusState private var focusedField: ProjectFocusField?
 
     private var visibleProjects: [Project] {
         store.projects(showArchived: showArchivedProjects)
+    }
+
+    private let maxVisibleStepDepth = 2
+
+    private var projectsListHeight: CGFloat {
+        let sectionsHeight = visibleProjects.reduce(CGFloat.zero) { total, project in
+            total + estimatedProjectSectionHeight(project)
+        }
+        let spacingHeight = CGFloat(max(visibleProjects.count - 1, 0)) * 8
+
+        return min(sectionsHeight + spacingHeight, 460)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            HStack(spacing: 8) {
-                TextField("新增长期项目", text: $newProjectTitle)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addProject)
+            projectCaptureSection
 
-                Button(action: addProject) {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.bordered)
-                .help("新增项目")
-                .disabled(newProjectTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            stepFilterBar
 
             Divider()
 
@@ -45,21 +74,11 @@ struct ProjectsPanelView: View {
                         }
                     }
                 }
-                .frame(maxHeight: 360)
+                .frame(height: projectsListHeight)
             }
 
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            } else if let successMessage {
-                Text(successMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
         }
+        .onAppear(perform: focusProjectCapture)
     }
 
     private var header: some View {
@@ -99,35 +118,90 @@ struct ProjectsPanelView: View {
         .padding(.vertical, 24)
     }
 
+    private var projectCaptureSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.badge.plus")
+                    .foregroundStyle(.secondary)
+
+                TextField("新增长期项目", text: $newProjectTitle)
+                    .textFieldStyle(.plain)
+                    .focused($focusedField, equals: .project)
+                    .onSubmit(addProject)
+                    .onExitCommand(perform: clearProjectCapture)
+
+                Button(action: addProject) {
+                    Image(systemName: "arrow.turn.down.left")
+                }
+                .buttonStyle(.bordered)
+                .help("新增项目")
+                .disabled(trimmedNewProjectTitle.isEmpty)
+            }
+
+            projectCaptureMessage
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var projectCaptureMessage: some View {
+        HStack(spacing: 6) {
+            if let errorMessage {
+                Image(systemName: "exclamationmark.circle")
+                Text(errorMessage)
+            } else if let successMessage {
+                Image(systemName: "checkmark.circle")
+                Text(successMessage)
+            } else {
+                Text("Return 添加项目，Esc 清空")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(projectMessageColor)
+        .lineLimit(1)
+    }
+
+    private var stepFilterBar: some View {
+        HStack(spacing: 8) {
+            Picker("步骤范围", selection: projectStepFilterBinding) {
+                ForEach(ProjectStepFilter.allCases) { filter in
+                    Text(filter.title).tag(filter.rawValue)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+
+            Text(stepFilterSummaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(minWidth: 78, alignment: .trailing)
+        }
+    }
+
     private func projectSection(_ project: Project) -> some View {
         DisclosureGroup(isExpanded: expandedBinding(for: project.id)) {
             VStack(alignment: .leading, spacing: 8) {
+                let visibleSteps = filteredSteps(project.steps)
+
                 if project.steps.isEmpty {
                     Text("还没有步骤")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 24)
+                } else if visibleSteps.isEmpty {
+                    Text(stepFilterEmptyText)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 24)
                 } else {
-                    ForEach(project.steps) { step in
-                        stepRow(step, project: project)
+                    ForEach(visibleSteps) { step in
+                        stepNode(step, project: project)
                     }
                 }
 
-                HStack(spacing: 8) {
-                    TextField("新增步骤", text: newStepBinding(for: project.id))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { addStep(to: project) }
-
-                    Button {
-                        addStep(to: project)
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.bordered)
-                    .help("新增步骤")
-                    .disabled((newStepTitles[project.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(.leading, 24)
+                stepCaptureSection(for: project)
             }
             .padding(.top, 6)
         } label: {
@@ -190,7 +264,132 @@ struct ProjectsPanelView: View {
         .onDisappear { commitProjectTitle(project) }
     }
 
-    private func stepRow(_ step: ProjectStep, project: Project) -> some View {
+    @ViewBuilder
+    private func stepNode(_ step: ProjectStep, project: Project) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let visibleChildren = step.children
+
+            stepRow(step, project: project, depth: 0)
+
+            if !visibleChildren.isEmpty || expandedStepIDs.contains(step.id) {
+                if !visibleChildren.isEmpty {
+                    ForEach(visibleChildren) { child in
+                        childStepNode(child, project: project)
+                    }
+                }
+
+                childStepCaptureSection(parentStep: step, project: project, depth: 1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func childStepNode(_ step: ProjectStep, project: Project) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let visibleChildren = step.children
+
+            stepRow(step, project: project, depth: 1)
+
+            if !visibleChildren.isEmpty || expandedStepIDs.contains(step.id) {
+                if !visibleChildren.isEmpty {
+                    ForEach(visibleChildren) { child in
+                        grandchildStepNode(child, project: project)
+                    }
+                }
+
+                childStepCaptureSection(parentStep: step, project: project, depth: 2)
+            }
+        }
+    }
+
+    private func grandchildStepNode(_ step: ProjectStep, project: Project) -> some View {
+        stepRow(step, project: project, depth: 2)
+    }
+
+    private func stepCaptureSection(for project: Project) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus.circle.fill")
+                .foregroundStyle(.secondary)
+
+            TextField("新增步骤", text: newStepBinding(for: project.id))
+                .textFieldStyle(.plain)
+                .focused($focusedField, equals: .step(project.id))
+                .onSubmit { addStep(to: project) }
+                .onExitCommand { clearStepCapture(for: project.id) }
+
+            Button {
+                addStep(to: project)
+            } label: {
+                Image(systemName: "arrow.turn.down.left")
+            }
+            .buttonStyle(.bordered)
+            .help("新增步骤")
+            .disabled(trimmedNewStepTitle(for: project.id).isEmpty)
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.leading, 24)
+    }
+
+    private func childStepCaptureSection(parentStep: ProjectStep, project: Project, depth: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.turn.down.right")
+                .foregroundStyle(.secondary)
+
+            TextField("新增子任务", text: newStepBinding(for: parentStep.id))
+                .textFieldStyle(.plain)
+                .focused($focusedField, equals: .step(parentStep.id))
+                .onSubmit { addChildStep(to: parentStep, project: project) }
+                .onExitCommand { clearStepCapture(for: parentStep.id) }
+
+            Button {
+                addChildStep(to: parentStep, project: project)
+            } label: {
+                Image(systemName: "arrow.turn.down.left")
+            }
+            .buttonStyle(.bordered)
+            .help("新增子任务")
+            .disabled(trimmedNewStepTitle(for: parentStep.id).isEmpty)
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.leading, stepLeadingPadding(for: depth))
+    }
+
+    private func estimatedProjectSectionHeight(_ project: Project) -> CGFloat {
+        var height: CGFloat = 86
+
+        if expandedProjectIDs.contains(project.id) {
+            let stepsHeight: CGFloat
+            if project.steps.isEmpty {
+                stepsHeight = 20
+            } else {
+                stepsHeight = estimatedStepsHeight(filteredSteps(project.steps), depth: 0)
+            }
+
+            height += 6 + stepsHeight + 8 + 36
+        }
+
+        return height
+    }
+
+    private func estimatedStepsHeight(_ steps: [ProjectStep], depth: Int) -> CGFloat {
+        steps.reduce(CGFloat.zero) { total, step in
+            var height: CGFloat = 38
+
+            if depth < maxVisibleStepDepth && (!step.children.isEmpty || expandedStepIDs.contains(step.id)) {
+                height += 6
+                height += estimatedStepsHeight(step.children, depth: depth + 1)
+                height += 44
+            }
+
+            return total + height + 6
+        }
+    }
+
+    private func stepRow(_ step: ProjectStep, project: Project, depth: Int) -> some View {
         HStack(spacing: 8) {
             Button {
                 setStepCompleted(step, project: project, isCompleted: !step.isCompleted)
@@ -207,6 +406,24 @@ struct ProjectsPanelView: View {
                 .strikethrough(step.isCompleted)
                 .lineLimit(1)
                 .onSubmit { commitStepTitle(step, project: project) }
+
+            if depth < maxVisibleStepDepth {
+                Button {
+                    showChildCapture(for: step)
+                } label: {
+                    Image(systemName: "list.bullet.indent")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("添加子任务")
+            }
+
+            WeeklyReportTagButton(
+                status: step.weeklyReportStatus,
+                note: step.weeklyReportNote
+            ) { status, note in
+                updateStepWeeklyReportMetadata(step, project: project, status: status, note: note)
+            }
 
             Button {
                 schedule(step, project: project)
@@ -230,7 +447,7 @@ struct ProjectsPanelView: View {
         .padding(.vertical, 3)
         .background(step.scheduledTodoID == nil ? Color.clear : Color.accentColor.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .padding(.leading, 24)
+        .padding(.leading, stepLeadingPadding(for: depth))
         .onDisappear { commitStepTitle(step, project: project) }
     }
 
@@ -250,8 +467,88 @@ struct ProjectsPanelView: View {
         return "\(project.completedStepCount)/\(project.totalStepCount) 已完成"
     }
 
+    private var projectStepFilter: ProjectStepFilter {
+        ProjectStepFilter(rawValue: projectStepFilterRaw) ?? .all
+    }
+
+    private var projectStepFilterBinding: Binding<String> {
+        Binding {
+            projectStepFilter.rawValue
+        } set: { value in
+            projectStepFilterRaw = value
+        }
+    }
+
+    private var stepFilterSummaryText: String {
+        let projects = visibleProjects
+
+        switch projectStepFilter {
+        case .all:
+            let total = projects.reduce(0) { $0 + $1.totalStepCount }
+            return "\(total) 个步骤"
+        case .open:
+            let total = projects.reduce(0) { $0 + $1.openStepCount }
+            return "\(total) 个未完成"
+        case .unscheduled:
+            let total = projects.reduce(0) { $0 + $1.unscheduledOpenStepCount }
+            return "\(total) 个未安排"
+        }
+    }
+
+    private var stepFilterEmptyText: String {
+        switch projectStepFilter {
+        case .all:
+            return "没有可显示的步骤"
+        case .open:
+            return "没有未完成步骤"
+        case .unscheduled:
+            return "没有未安排步骤"
+        }
+    }
+
+    private func filteredSteps(_ steps: [ProjectStep]) -> [ProjectStep] {
+        steps.compactMap(filteredStep)
+    }
+
+    private func filteredStep(_ step: ProjectStep) -> ProjectStep? {
+        let children = filteredSteps(step.children)
+
+        guard stepMatchesCurrentFilter(step) || !children.isEmpty else {
+            return nil
+        }
+
+        var visibleStep = step
+        visibleStep.children = children
+        return visibleStep
+    }
+
+    private func stepMatchesCurrentFilter(_ step: ProjectStep) -> Bool {
+        switch projectStepFilter {
+        case .all:
+            return true
+        case .open:
+            return !step.isCompleted
+        case .unscheduled:
+            return !step.isCompleted && step.scheduledTodoID == nil
+        }
+    }
+
     private func nextActionableStep(in project: Project) -> ProjectStep? {
-        project.steps.first { !$0.isCompleted && $0.scheduledTodoID == nil }
+        nextActionableStep(in: project.steps)
+    }
+
+    private func nextActionableStep(in steps: [ProjectStep]) -> ProjectStep? {
+        for step in steps {
+            if !step.isCompleted && step.scheduledTodoID == nil {
+                return step
+            }
+
+            if let child = nextActionableStep(in: step.children) {
+                return child
+            }
+        }
+
+        return nil
     }
 
     private func projectSectionBackground(for project: Project) -> Color {
@@ -264,6 +561,30 @@ struct ProjectsPanelView: View {
         }
 
         return Color.clear
+    }
+
+    private var projectMessageColor: Color {
+        if errorMessage != nil {
+            return .red
+        }
+
+        if successMessage != nil {
+            return .secondary
+        }
+
+        return Color.secondary.opacity(0.75)
+    }
+
+    private var trimmedNewProjectTitle: String {
+        newProjectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func trimmedNewStepTitle(for projectID: UUID) -> String {
+        (newStepTitles[projectID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func stepLeadingPadding(for depth: Int) -> CGFloat {
+        24 + CGFloat(depth) * 18
     }
 
     private func expandedBinding(for projectID: UUID) -> Binding<Bool> {
@@ -302,16 +623,44 @@ struct ProjectsPanelView: View {
         }
     }
 
+    private func focusProjectCapture() {
+        DispatchQueue.main.async {
+            focusedField = .project
+        }
+    }
+
+    private func focusStepCapture(for projectID: UUID) {
+        DispatchQueue.main.async {
+            focusedField = .step(projectID)
+        }
+    }
+
+    private func clearProjectCapture() {
+        newProjectTitle = ""
+        errorMessage = nil
+        successMessage = nil
+        focusProjectCapture()
+    }
+
+    private func clearStepCapture(for projectID: UUID) {
+        newStepTitles[projectID] = ""
+        errorMessage = nil
+        successMessage = nil
+        focusStepCapture(for: projectID)
+    }
+
     private func addProject() {
         do {
             let project = try store.addProject(title: newProjectTitle)
             expandedProjectIDs.insert(project.id)
             newProjectTitle = ""
-            successMessage = nil
+            successMessage = "已添加项目"
             errorMessage = nil
+            focusStepCapture(for: project.id)
         } catch {
             successMessage = nil
             errorMessage = "无法新增项目。"
+            focusProjectCapture()
         }
     }
 
@@ -348,11 +697,33 @@ struct ProjectsPanelView: View {
             _ = try store.addStep(project.id, title: newStepTitles[project.id] ?? "")
             newStepTitles[project.id] = ""
             expandedProjectIDs.insert(project.id)
-            successMessage = nil
+            successMessage = "已添加步骤"
             errorMessage = nil
+            focusStepCapture(for: project.id)
         } catch {
             successMessage = nil
             errorMessage = "无法新增步骤。"
+            focusStepCapture(for: project.id)
+        }
+    }
+
+    private func addChildStep(to parentStep: ProjectStep, project: Project) {
+        do {
+            _ = try store.addChildStep(
+                projectID: project.id,
+                parentStepID: parentStep.id,
+                title: newStepTitles[parentStep.id] ?? ""
+            )
+            newStepTitles[parentStep.id] = ""
+            expandedProjectIDs.insert(project.id)
+            expandedStepIDs.insert(parentStep.id)
+            successMessage = "已添加子任务"
+            errorMessage = nil
+            focusStepCapture(for: parentStep.id)
+        } catch {
+            successMessage = nil
+            errorMessage = "无法新增子任务。"
+            focusStepCapture(for: parentStep.id)
         }
     }
 
@@ -407,6 +778,11 @@ struct ProjectsPanelView: View {
         expandedProjectIDs.insert(project.id)
     }
 
+    private func showChildCapture(for step: ProjectStep) {
+        expandedStepIDs.insert(step.id)
+        focusStepCapture(for: step.id)
+    }
+
     private func deleteStep(_ step: ProjectStep, project: Project) {
         do {
             try store.deleteStep(projectID: project.id, stepID: step.id)
@@ -416,6 +792,27 @@ struct ProjectsPanelView: View {
         } catch {
             successMessage = nil
             errorMessage = "无法删除步骤。"
+        }
+    }
+
+    private func updateStepWeeklyReportMetadata(
+        _ step: ProjectStep,
+        project: Project,
+        status: WeeklyReportStatus,
+        note: String?
+    ) {
+        do {
+            try store.updateStepWeeklyReportMetadata(
+                projectID: project.id,
+                stepID: step.id,
+                status: status,
+                note: note
+            )
+            successMessage = "已更新周报标记"
+            errorMessage = nil
+        } catch {
+            successMessage = nil
+            errorMessage = "无法更新周报标记。"
         }
     }
 }

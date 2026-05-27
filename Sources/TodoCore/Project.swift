@@ -25,11 +25,27 @@ public struct Project: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var totalStepCount: Int {
-        steps.count
+        steps.reduce(0) { total, step in
+            total + step.totalStepCount
+        }
     }
 
     public var completedStepCount: Int {
-        steps.filter(\.isCompleted).count
+        steps.reduce(0) { total, step in
+            total + step.completedStepCount
+        }
+    }
+
+    public var openStepCount: Int {
+        steps.reduce(0) { total, step in
+            total + step.openStepCount
+        }
+    }
+
+    public var unscheduledOpenStepCount: Int {
+        steps.reduce(0) { total, step in
+            total + step.unscheduledOpenStepCount
+        }
     }
 }
 
@@ -40,6 +56,9 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
     public let createdAt: Date
     public var completedAt: Date?
     public var scheduledTodoID: UUID?
+    public var children: [ProjectStep]
+    public var weeklyReportStatus: WeeklyReportStatus
+    public var weeklyReportNote: String?
 
     public init(
         id: UUID = UUID(),
@@ -47,7 +66,10 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         completedAt: Date? = nil,
-        scheduledTodoID: UUID? = nil
+        scheduledTodoID: UUID? = nil,
+        children: [ProjectStep] = [],
+        weeklyReportStatus: WeeklyReportStatus = .normal,
+        weeklyReportNote: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -55,6 +77,58 @@ public struct ProjectStep: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.completedAt = completedAt
         self.scheduledTodoID = scheduledTodoID
+        self.children = children
+        self.weeklyReportStatus = weeklyReportStatus
+        self.weeklyReportNote = weeklyReportNote
+    }
+
+    public var totalStepCount: Int {
+        1 + children.reduce(0) { total, child in
+            total + child.totalStepCount
+        }
+    }
+
+    public var completedStepCount: Int {
+        (isCompleted ? 1 : 0) + children.reduce(0) { total, child in
+            total + child.completedStepCount
+        }
+    }
+
+    public var openStepCount: Int {
+        (isCompleted ? 0 : 1) + children.reduce(0) { total, child in
+            total + child.openStepCount
+        }
+    }
+
+    public var unscheduledOpenStepCount: Int {
+        let ownCount = !isCompleted && scheduledTodoID == nil ? 1 : 0
+        return ownCount + children.reduce(0) { total, child in
+            total + child.unscheduledOpenStepCount
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case isCompleted
+        case createdAt
+        case completedAt
+        case scheduledTodoID
+        case children
+        case weeklyReportStatus
+        case weeklyReportNote
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.isCompleted = try container.decode(Bool.self, forKey: .isCompleted)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.completedAt = try container.decodeIfPresent(Date.self, forKey: .completedAt)
+        self.scheduledTodoID = try container.decodeIfPresent(UUID.self, forKey: .scheduledTodoID)
+        self.children = try container.decodeIfPresent([ProjectStep].self, forKey: .children) ?? []
+        self.weeklyReportStatus = try container.decodeIfPresent(WeeklyReportStatus.self, forKey: .weeklyReportStatus) ?? .normal
+        self.weeklyReportNote = try container.decodeIfPresent(String.self, forKey: .weeklyReportNote)
     }
 }
-

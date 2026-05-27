@@ -10,6 +10,7 @@ struct TodoRowView: View {
     let onToggle: () -> Void
     let onCommitTitle: () -> Void
     let onDelete: () -> Void
+    var onUpdateWeeklyReport: (WeeklyReportStatus, String?) -> Void = { _, _ in }
     @FocusState private var isTitleFocused: Bool
 
     var body: some View {
@@ -42,6 +43,12 @@ struct TodoRowView: View {
                         .lineLimit(1)
                 }
             }
+
+            WeeklyReportTagButton(
+                status: item.weeklyReportStatus,
+                note: item.weeklyReportNote,
+                onSave: onUpdateWeeklyReport
+            )
 
             Button(action: onDelete) {
                 Image(systemName: "trash")
